@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PiTrap — SSH Honeypot Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0a0e1a; color: #e0e0e0; font-family: 'Courier New', monospace; min-height: 100vh; }
+        header { background: #0d1117; border-bottom: 1px solid #ff4444; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; }
+        header h1 { color: #ff4444; font-size: 1.4rem; letter-spacing: 2px; }
+        #status { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; }
+        #status-dot { width: 10px; height: 10px; border-radius: 50%; background: #ff4444; animation: pulse 1.5s infinite; }
+        #status-dot.connected { background: #00ff88; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+        /* Tabs */
+        .tabs { display: flex; gap: 0; background: #0d1117; border-bottom: 1px solid #1e2a3a; padding: 0 30px; }
+        .tab { padding: 12px 24px; cursor: pointer; font-size: 0.82rem; color: #666; border-bottom: 2px solid transparent; letter-spacing: 1px; text-transform: uppercase; transition: all 0.2s; }
+        .tab:hover { color: #e0e0e0; }
+        .tab.active { color: #ff4444; border-bottom-color: #ff4444; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; padding: 20px 30px; }
+        .stat-card { background: #0d1117; border: 1px solid #1e2a3a; border-radius: 8px; padding: 20px; text-align: center; }
+        .stat-card .value { font-size: 2rem; font-weight: bold; color: #ff4444; }
+        .stat-card .label { font-size: 0.75rem; color: #666; margin-top: 5px; text-transform: uppercase; letter-spacing: 1px; }
+        .main-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; padding: 0 30px 20px; }
+        .panel { background: #0d1117; border: 1px solid #1e2a3a; border-radius: 8px; padding: 20px; }
+        .panel h2 { font-size: 0.85rem; color: #ff4444; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 15px; border-bottom: 1px solid #1e2a3a; padding-bottom: 10px; }
+        #map { height: 300px; border-radius: 6px; filter: brightness(0.8); }
+        .attempt-feed { height: 300px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #ff4444 #0d1117; }
+        .attempt-item { display: grid; grid-template-columns: 140px 1fr 1fr 80px; gap: 10px; padding: 8px 0; border-bottom: 1px solid #1a1f2e; font-size: 0.78rem; animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; background: #1a0000; } to { opacity: 1; background: transparent; } }
+        .attempt-item .ip { color: #ff8800; }
+        .attempt-item .creds { color: #00aaff; }
+        .attempt-item .country { color: #00ff88; }
+        .badge { padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; text-align: center; }
+        .badge.bot { background: #ff444433; color: #ff4444; }
+        .badge.script_kiddie { background: #ff880033; color: #ff8800; }
+        .badge.scanner { background: #0088ff33; color: #0088ff; }
+        .badge.targeted { background: #ff004433; color: #ff0044; }
+        .badge.unknown { background: #33333333; color: #888; }
+        .risk-critical { background: #ff000033; color: #ff0000; }
+        .risk-high { background: #ff440033; color: #ff4444; }
+        .risk-medium { background: #ff880033; color: #ff8800; }
+        .risk-low { background: #00880033; color: #00aa44; }
+        .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; padding: 0 30px 30px; }
+        .tunnel-bar { background: #0d1117; border: 1px solid #1e2a3a; margin: 0 30px 15px; padding: 12px 20px; border-radius: 8px; font-size: 0.82rem; display: flex; align-items: center; gap: 15px; }
+        .tunnel-bar span { color: #666; }
+        .tunnel-bar strong { color: #00ff88; }
+
+        /* Sessions Tab */
+        .sessions-container { padding: 20px 30px; }
+        .sessions-list { display: grid; gap: 10px; margin-bottom: 20px; }
+        .session-card { background: #0d1117; border: 1px solid #1e2a3a; border-radius: 8px; padding: 15px 20px; cursor: pointer; transition: border-color 0.2s; display: grid; grid-template-columns: 1fr 1fr 1fr 1fr auto; align-items: center; gap: 15px; }
+        .session-card:hover { border-color: #ff4444; }
+        .session-card.selected { border-color: #ff4444; background: #1a0a0a; }
+        .session-ip { color: #ff8800; font-size: 0.85rem; }
+        .session-time { color: #666; font-size: 0.75rem; }
+        .session-commands { color: #00aaff; font-size: 0.82rem; }
+        .session-mitre { color: #ffaa00; font-size: 0.75rem; }
+
+        /* Session Replay */
+        .session-replay { background: #0d1117; border: 1px solid #1e2a3a; border-radius: 8px; padding: 20px; }
+        .session-replay h3 { color: #ff4444; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #1e2a3a; }
+        .command-block { margin-bottom: 12px; border-left: 3px solid #1e2a3a; padding-left: 12px; }
+        .command-block.flagged { border-left-color: #ff4444; }
+        .command-block.critical { border-left-color: #ff0000; }
+        .command-input { color: #00ff88; font-size: 0.82rem; margin-bottom: 4px; }
+        .command-input::before { content: "$ "; color: #ff4444; }
+        .command-output { color: #888; font-size: 0.78rem; white-space: pre-wrap; line-height: 1.4; }
+        .command-technique { display: inline-block; background: #ff440022; border: 1px solid #ff444444; color: #ff8888; font-size: 0.68rem; padding: 2px 6px; border-radius: 3px; margin-top: 4px; }
+        .command-time { color: #444; font-size: 0.68rem; margin-bottom: 4px; }
+        .no-sessions { color: #444; text-align: center; padding: 60px; font-size: 0.9rem; }
+        .session-header-info { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px; }
+        .session-stat { background: #161b2e; border-radius: 6px; padding: 10px; text-align: center; }
+        .session-stat .val { color: #ff4444; font-size: 1.2rem; font-weight: bold; }
+        .session-stat .lbl { color: #666; font-size: 0.7rem; text-transform: uppercase; }
+        .malware-url { display: inline-block; background: #ff000022; border: 1px solid #ff000044; color: #ff6666; font-size: 0.72rem; padding: 3px 8px; border-radius: 3px; margin: 2px; word-break: break-all; }
+        .refresh-btn { background: #ff444422; border: 1px solid #ff4444; color: #ff4444; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; font-family: 'Courier New', monospace; letter-spacing: 1px; }
+        .refresh-btn:hover { background: #ff444444; }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>🍯 PITRAP — SSH HONEYPOT</h1>
+    <div id="status">
+        <div id="status-dot"></div>
+        <span id="status-text">Connecting...</span>
+    </div>
+</header>
+
+<!-- Tabs -->
+<div class="tabs">
+    <div class="tab active" onclick="switchTab('dashboard')">⚡ Dashboard</div>
+    <div class="tab" onclick="switchTab('sessions')">🖥️ Shell Sessions</div>
+</div>
+
+<!-- Dashboard Tab -->
+<div id="tab-dashboard" class="tab-content active">
+    <div class="tunnel-bar">
+        <span>PUBLIC TUNNEL:</span>
+        <strong id="tunnel-url">Loading...</strong>
+        <span style="margin-left:auto; color:#444">Attackers connect here → Pi logs everything</span>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="value" id="total-attempts">0</div>
+            <div class="label">Total Attempts</div>
+        </div>
+        <div class="stat-card">
+            <div class="value" id="unique-ips">0</div>
+            <div class="label">Unique IPs</div>
+        </div>
+        <div class="stat-card">
+            <div class="value" id="top-username" style="font-size:1.2rem">-</div>
+            <div class="label">Top Username</div>
+        </div>
+        <div class="stat-card">
+            <div class="value" id="top-password" style="font-size:1.2rem">-</div>
+            <div class="label">Top Password</div>
+        </div>
+    </div>
+
+    <div class="main-grid">
+        <div class="panel">
+            <h2>🌍 Attack Origins</h2>
+            <div id="map"></div>
+        </div>
+        <div class="panel">
+            <h2>⚡ Live Attack Feed</h2>
+            <div class="attempt-feed" id="attempt-feed">
+                <div style="color:#444; text-align:center; margin-top:50px">Waiting for attacks...</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="charts-grid">
+        <div class="panel">
+            <h2>👤 Top Usernames</h2>
+            <canvas id="username-chart"></canvas>
+        </div>
+        <div class="panel">
+            <h2>🔑 Top Passwords</h2>
+            <canvas id="password-chart"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- Sessions Tab -->
+<div id="tab-sessions" class="tab-content">
+    <div class="sessions-container">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px">
+            <span style="color:#666; font-size:0.82rem">Click a session to view full command replay</span>
+            <button class="refresh-btn" onclick="loadSessions()">↻ REFRESH</button>
+        </div>
+        <div class="sessions-list" id="sessions-list">
+            <div class="no-sessions">No shell sessions yet — waiting for attackers to get fake shell access</div>
+        </div>
+        <div id="session-replay-container" style="display:none">
+            <div class="session-replay" id="session-replay"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // ── Tab Switching ────────────────────────────────────────
+    function switchTab(tab) {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+        document.getElementById('tab-' + tab).classList.add('active');
+        event.target.classList.add('active');
+        if (tab === 'sessions') loadSessions();
+    }
+
+    // ── Map Setup ────────────────────────────────────────────
+    const map = L.map('map', { zoomControl: false }).setView([20, 0], 2);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '© OpenStreetMap © CARTO'
+    }).addTo(map);
+
+    const attackMarkers = {};
+    function addMapMarker(lat, lon, ip, country) {
+        if (!lat || !lon || (lat === 0 && lon === 0)) return;
+        const key = `${lat},${lon}`;
+        if (attackMarkers[key]) {
+            attackMarkers[key].attempts++;
+            attackMarkers[key].marker.setRadius(Math.min(4 + attackMarkers[key].attempts, 15));
+        } else {
+            const marker = L.circleMarker([lat, lon], {
+                radius: 5, fillColor: '#ff4444', color: '#ff0000',
+                weight: 1, opacity: 0.8, fillOpacity: 0.6
+            }).addTo(map);
+            marker.bindPopup(`<b>${ip}</b><br>${country}`);
+            attackMarkers[key] = { marker, attempts: 1 };
+        }
+    }
+
+    // ── Charts ───────────────────────────────────────────────
+    const chartConfig = (label) => ({
+        type: 'bar',
+        data: { labels: [], datasets: [{ label, data: [], backgroundColor: '#ff444466', borderColor: '#ff4444', borderWidth: 1 }]},
+        options: { responsive: true, plugins: { legend: { display: false }}, scales: { x: { ticks: { color: '#666', font: { size: 10 }}}, y: { ticks: { color: '#666' }, beginAtZero: true }}}
+    });
+    const usernameChart = new Chart(document.getElementById('username-chart'), chartConfig('Attempts'));
+    const passwordChart = new Chart(document.getElementById('password-chart'), chartConfig('Attempts'));
+    const usernameCounts = {};
+    const passwordCounts = {};
+
+    function updateChart(chart, counts) {
+        const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
+        chart.data.labels = sorted.map(e => e[0] || '(empty)');
+        chart.data.datasets[0].data = sorted.map(e => e[1]);
+        chart.update('none');
+    }
+
+    // ── Stats ────────────────────────────────────────────────
+    let totalAttempts = 0;
+    const uniqueIPs = new Set();
+
+    function updateStats() {
+        document.getElementById('total-attempts').textContent = totalAttempts.toLocaleString();
+        document.getElementById('unique-ips').textContent = uniqueIPs.size.toLocaleString();
+        const topUser = Object.entries(usernameCounts).sort((a, b) => b[1] - a[1])[0];
+        if (topUser) document.getElementById('top-username').textContent = topUser[0] || '(empty)';
+        const topPass = Object.entries(passwordCounts).sort((a, b) => b[1] - a[1])[0];
+        if (topPass) document.getElementById('top-password').textContent = topPass[0] || '(empty)';
+    }
+
+    // ── Feed ─────────────────────────────────────────────────
+    function addAttemptToFeed(attempt) {
+        const feed = document.getElementById('attempt-feed');
+        const placeholder = feed.querySelector('div');
+        if (placeholder && placeholder.style.color === 'rgb(68, 68, 68)') placeholder.remove();
+        const item = document.createElement('div');
+        item.className = 'attempt-item';
+        item.innerHTML = `
+            <span class="ip">${attempt.source_ip}</span>
+            <span class="creds">${attempt.username || '?'}:${attempt.password || '?'}</span>
+            <span class="country">📍 ${attempt.country || 'Unknown'}</span>
+            <span class="badge ${attempt.attacker_type || 'unknown'}">${attempt.attacker_type || 'unknown'}</span>
+        `;
+        feed.insertBefore(item, feed.firstChild);
+        while (feed.children.length > 100) feed.removeChild(feed.lastChild);
+    }
+
+    function processAttempt(attempt) {
+        totalAttempts++;
+        uniqueIPs.add(attempt.source_ip);
+        const u = attempt.username || '';
+        const p = attempt.password || '';
+        usernameCounts[u] = (usernameCounts[u] || 0) + 1;
+        passwordCounts[p] = (passwordCounts[p] || 0) + 1;
+        addAttemptToFeed(attempt);
+        addMapMarker(attempt.latitude, attempt.longitude, attempt.source_ip, attempt.country);
+        updateStats();
+        updateChart(usernameChart, usernameCounts);
+        updateChart(passwordChart, passwordCounts);
+    }
+
+    // ── Sessions Tab ─────────────────────────────────────────
+    async function loadSessions() {
+        try {
+            const res = await fetch('/api/sessions?limit=50');
+            const sessions = await res.json();
+            const container = document.getElementById('sessions-list');
+
+            if (!sessions.length) {
+                container.innerHTML = '<div class="no-sessions">No shell sessions yet — waiting for attackers to get fake shell access</div>';
+                return;
+            }
+
+            container.innerHTML = sessions.map(s => {
+                const risk = s.risk_level || 'low';
+                const techniques = s.mitre_techniques ? JSON.parse(s.mitre_techniques.replace(/'/g, '"')) : [];
+                const duration = s.ended_at ? Math.round((new Date(s.ended_at) - new Date(s.started_at)) / 1000) : '?';
+                return `
+                <div class="session-card" onclick="loadSessionReplay(${s.id}, this)">
+                    <div>
+                        <div class="session-ip">${s.source_ip}</div>
+                        <div class="session-time">${s.started_at}</div>
+                    </div>
+                    <div class="session-commands">⌨️ ${s.total_commands} commands</div>
+                    <div class="session-mitre">
+                        ${techniques.length ? '⚠️ ' + techniques.join(', ') : '— no techniques'}
+                    </div>
+                    <div class="session-time">⏱ ${duration}s</div>
+                    <span class="badge risk-${risk}">${risk.toUpperCase()}</span>
+                </div>`;
+            }).join('');
+        } catch(e) {
+            console.error('Failed to load sessions:', e);
+        }
+    }
+
+    async function loadSessionReplay(sessionId, card) {
+        // Highlight selected card
+        document.querySelectorAll('.session-card').forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+
+        try {
+            const res = await fetch(`/api/sessions/${sessionId}`);
+            const data = await res.json();
+
+            // Get session metadata
+            const sessRes = await fetch('/api/sessions?limit=50');
+            const sessions = await sessRes.json();
+            const session = sessions.find(s => s.id === sessionId);
+
+            const container = document.getElementById('session-replay-container');
+            const replay = document.getElementById('session-replay');
+            container.style.display = 'block';
+
+            const risk = session?.risk_level || 'low';
+            const techniques = session?.mitre_techniques ? JSON.parse(session.mitre_techniques.replace(/'/g, '"')) : [];
+            const malwareUrls = session?.malware_urls ? JSON.parse(session.malware_urls.replace(/'/g, '"')) : [];
+            const duration = session?.ended_at ? Math.round((new Date(session.ended_at) - new Date(session.started_at)) / 1000) : '?';
+
+            replay.innerHTML = `
+                <h3>🖥️ Session Replay — ${session?.source_ip || 'Unknown'}</h3>
+                <div class="session-header-info">
+                    <div class="session-stat">
+                        <div class="val">${data.total}</div>
+                        <div class="lbl">Commands</div>
+                    </div>
+                    <div class="session-stat">
+                        <div class="val">${duration}s</div>
+                        <div class="lbl">Duration</div>
+                    </div>
+                    <div class="session-stat">
+                        <div class="val">${techniques.length}</div>
+                        <div class="lbl">MITRE Techniques</div>
+                    </div>
+                    <div class="session-stat">
+                        <div class="val"><span class="badge risk-${risk}">${risk.toUpperCase()}</span></div>
+                        <div class="lbl">Risk Level</div>
+                    </div>
+                </div>
+                ${techniques.length ? `
+                <div style="margin-bottom:12px">
+                    <span style="color:#666; font-size:0.75rem">MITRE ATT&CK: </span>
+                    ${techniques.map(t => `<span class="command-technique">${t}</span>`).join(' ')}
+                </div>` : ''}
+                ${malwareUrls.length ? `
+                <div style="margin-bottom:12px">
+                    <span style="color:#ff4444; font-size:0.75rem">⚠️ MALWARE URLs DETECTED: </span>
+                    ${malwareUrls.map(u => `<span class="malware-url">${u}</span>`).join('')}
+                </div>` : ''}
+                <div style="border-top:1px solid #1e2a3a; padding-top:12px">
+                ${data.commands.map(cmd => `
+                    <div class="command-block ${cmd.flagged ? (cmd.technique_id === 'T1496' ? 'critical' : 'flagged') : ''}">
+                        <div class="command-time">${cmd.timestamp}</div>
+                        <div class="command-input">${escapeHtml(cmd.command)}</div>
+                        <div class="command-output">${escapeHtml(cmd.response || '')}</div>
+                        ${cmd.technique_id ? `<span class="command-technique">⚡ ${cmd.technique_id} — ${cmd.technique_name}</span>` : ''}
+                    </div>
+                `).join('')}
+                </div>
+            `;
+
+            // Scroll to replay
+            container.scrollIntoView({ behavior: 'smooth' });
+        } catch(e) {
+            console.error('Failed to load session replay:', e);
+        }
+    }
+
+    function escapeHtml(text) {
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    // ── WebSocket ────────────────────────────────────────────
+    function connectWebSocket() {
+        const ws = new WebSocket(`ws://${window.location.host}/ws`);
+        const dot = document.getElementById('status-dot');
+        const text = document.getElementById('status-text');
+        ws.onopen = () => { dot.classList.add('connected'); text.textContent = 'Live — Monitoring Active'; };
+        ws.onmessage = (event) => { processAttempt(JSON.parse(event.data)); };
+        ws.onclose = () => { dot.classList.remove('connected'); text.textContent = 'Reconnecting...'; setTimeout(connectWebSocket, 3000); };
+        ws.onerror = () => { text.textContent = 'Connection error'; };
+    }
+
+    // ── Tunnel URL ───────────────────────────────────────────
+    async function fetchTunnelUrl() {
+        try {
+            const res = await fetch('/api/tunnel');
+            const data = await res.json();
+            document.getElementById('tunnel-url').textContent = data.tunnel_url || 'Not available';
+        } catch { document.getElementById('tunnel-url').textContent = 'No tunnel active'; }
+    }
+
+    // ── Init ─────────────────────────────────────────────────
+    connectWebSocket();
+    fetchTunnelUrl();
+    setInterval(fetchTunnelUrl, 30000);
+</script>
+</body>
+</html>
