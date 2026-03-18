@@ -14,7 +14,7 @@ from storage.db import init_db, insert_attempt, create_session_tables, \
                        create_shell_session, close_shell_session
 from server.enricher import enrich
 from server.classifier import classify_attacker
-from server.fake_shell import FakeShell, PROMPT
+from server.fake_shell import FakeShell
 
 load_dotenv()
 
@@ -127,7 +127,7 @@ class HoneypotServer(paramiko.ServerInterface):
                 f"Last login: Fri Mar 12 08:14:22 2026 from 10.0.0.1\r\n"
             )
             channel.send(banner)
-            channel.send(PROMPT)
+            channel.send(fake_shell.prompt)
 
             command_buffer = ""
             while True:
@@ -145,14 +145,14 @@ class HoneypotServer(paramiko.ServerInterface):
                             response_formatted = response.replace("\n", "\r\n")
                             channel.send(response_formatted)
                         else:
-                            channel.send(PROMPT)
+                            channel.send(fake_shell.prompt)
                         command_buffer = ""
                     elif char == "\x7f":
                         if command_buffer:
                             command_buffer = command_buffer[:-1]
                             channel.send("\b \b")
                     elif char == "\x03":
-                        channel.send("^C\r\n" + PROMPT)
+                        channel.send("^C\r\n" + fake_shell.prompt)
                         command_buffer = ""
                     elif char == "\x04":
                         channel.send("logout\r\n")
