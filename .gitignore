@@ -7,3 +7,5 @@ __pycache__/
 ~/.pitrap_host_key
 *.log
 ngrok.tgz
+sync_to_sd.sh
+safe-exit.sh
